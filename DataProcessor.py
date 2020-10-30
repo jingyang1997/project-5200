@@ -4,6 +4,7 @@ import urllib
 import re
 import html
 import csv
+import random
 
 class DataProcessor(object):
     def __init__(self, min_len):
@@ -33,9 +34,29 @@ class DataProcessor(object):
         self.index_wordbag = 1
         self.wordbag = {}
 
-    def dataProcessing(self, malFile, normFile):
+    def makeAlign(self, entry, length):
+        if length > len(entry):
+            return entry + [0]*(length - len(entry))
+        return entry
+
+    def regularize(self, entries):
+        mlen = 0
+        for entry in entries:
+            mlen = max(mlen, len(entry))
+        for i in range(len(entries)):
+            entries[i] = self.makeAlign(entries[i], mlen)
+
+    def shaffle(self, entries, labels):
+        x = list(range(len(entries)))
+        random.shuffle(x)
+        entries = [entries[i] for i in x]
+        labels = [labels[i] for i in x]
+        return entries, labels
+
+    def dataProcessingForSVM(self, malFile, normFile):
         entries = []
         labels = []
+        self.clearAll()
         # Ignore the inputs with length <= min_len.
         malwareDataProcessor = MalwareDataProcesser(self.MIN_LEN)
         # Load the frequency distribution from the training dataset.
@@ -77,6 +98,7 @@ class DataProcessor(object):
                             vers[-1] += 1
                     entries.append(vers)
                     labels.append(0)
+        # Start loading normal data input
         with open(normFile, newline='') as f:
             reader = csv.reader(f)
             data = list(reader)
@@ -96,14 +118,82 @@ class DataProcessor(object):
                 entries.append(vers)
                 labels.append(1)
 
-        # The length of each entry.
-        print(len(entries[0]))
-        # The number of entries.
-        print(len(entries))
-        # The number of labels.
-        print(len(labels))
+        # # The length of each entry.
+        # print(len(entries[0]))
+        # # The number of entries.
+        # print(len(entries))
+        # # The number of labels.
+        # print(len(labels))
+        # Process data
+        entries, labels = self.shaffle(entries, labels)
         return entries, labels
 
+    def dataProcessingForRNN(self, malFile, normFile):
+        entries = []
+        labels = []
+        self.clearAll()
+        # Ignore the inputs with length <= min_len.
+        malwareDataProcessor = MalwareDataProcesser(self.MIN_LEN)
+        # Load the frequency distribution from the training dataset.
+        malwareDataProcessor.load_freqdist(malFile)
+        # Ignore the inputs with length <= min_len.
+        normalDataProcessor = NormalDataProcessor(self.MIN_LEN)
+        # Load the frequency distribution from the training dataset.
+        normalDataProcessor.load_freqdist(normFile)
+        # Merge the two fq sets
+        self.load_freqdist(malwareDataProcessor.getFreq(), normalDataProcessor.getFreq())
+        print(self.freqdist.keys())
+        print(self.freqdist.values())
+        # Load wordbag from the fq dictionary. Tag -1 for those words that appear less than 10 times.
+        self.load_wordbag(10)
+        # Start loading malware data input:
+        with open(malFile) as f:
+            for line in f:
+                line = line.strip('\n')
+                # url解码
+                line = urllib.parse.unquote(line)
+
+                # 处理html转义字符
+                line = html.unescape(line)
+                if len(line) >= self.MIN_LEN:
+                    # print "Learning xss query param:(%s)" % line
+                    # number replaced to 8
+                    line, number = re.subn(r'\d+', "8", line)
+                    # ulr replaced to http://u
+                    line, number = re.subn(r'(http|https)://[a-zA-Z0-9\.@&/#!#\?:=]+', "http://u", line)
+                    # clear the comments
+                    line, number = re.subn(r'\/\*.?\*\/', "", line)
+                    words = malwareDataProcessor.do_str(line)
+                    vers = []
+                    for word in words:
+                        if word in self.wordbag.keys():
+                            vers.append(self.wordbag[word])
+                        else:
+                            vers.append(-1)
+                    entries.append(vers)
+                    labels.append(0)
+        # Start loading normal data input
+        with open(normFile, newline='') as f:
+            reader = csv.reader(f)
+            data = list(reader)
+            # print(data[0])
+        for i in range(1,len(data)):
+            line = data[i][6:][0]
+            if len(line) > self.MIN_LEN:
+                line = normalDataProcessor.do_str(line)
+                words = re.findall("\w+['\w+]*", line)
+                vers = []
+                for word in words:
+                    if word in self.wordbag.keys():
+                        vers.append(self.wordbag[word])
+                    else:
+                        vers.append(-1)
+                entries.append(vers)
+                labels.append(1)
+        # Process data
+        self.regularize(entries)
+        entries, labels = self.shaffle(entries, labels)
+        return entries, labels
 
 
 
